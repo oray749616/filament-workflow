@@ -189,6 +189,13 @@ class VolcengineService
             $buffer = '';
             $stream = $response->getBody();
             
+            // 用于累积内容的缓冲区
+            $contentBuffer = '';
+            // 缓冲区大小阈值，超过此值将强制输出
+            $bufferThreshold = 50;
+            // 定义可能表示完整语义单元结束的字符
+            $semanticBreakChars = [' ', ',', '.', '!', '?', '，', '。', '！', '？', '、', '；', '：', "\n", "\r"];
+            
             while (!$stream->eof()) {
                 // 读取一行数据
                 $line = $stream->read(1024);
@@ -213,6 +220,10 @@ class VolcengineService
                     
                     // 处理特殊的结束标记，对应于流结束
                     if (trim($line) === '[DONE]') {
+                        // 输出剩余的缓冲内容
+                        if (!empty($contentBuffer)) {
+                            yield $contentBuffer;
+                        }
                         yield '';
                         return;
                     }
@@ -224,7 +235,30 @@ class VolcengineService
                         // 检查是否有内容
                         if (isset($data['choices'][0]['delta']['content'])) {
                             $content = $data['choices'][0]['delta']['content'];
-                            yield $content;
+                            
+                            // 将新内容添加到缓冲区
+                            $contentBuffer .= $content;
+                            
+                            // 检查是否应该输出缓冲区内容
+                            $shouldYield = false;
+                            
+                            // 如果缓冲区达到阈值大小，则输出
+                            if (mb_strlen($contentBuffer) >= $bufferThreshold) {
+                                $shouldYield = true;
+                            } 
+                            // 如果内容以语义分隔符结尾，则输出
+                            elseif (!empty($contentBuffer)) {
+                                $lastChar = mb_substr($contentBuffer, -1);
+                                if (in_array($lastChar, $semanticBreakChars)) {
+                                    $shouldYield = true;
+                                }
+                            }
+                            
+                            // 如果应该输出，则yield缓冲区内容并清空缓冲区
+                            if ($shouldYield && !empty($contentBuffer)) {
+                                yield $contentBuffer;
+                                $contentBuffer = '';
+                            }
                         }
                     } catch (\Exception $e) {
                         // 忽略无效的JSON
@@ -234,6 +268,11 @@ class VolcengineService
                         ]);
                     }
                 }
+            }
+            
+            // 确保缓冲区中的最后内容被输出
+            if (!empty($contentBuffer)) {
+                yield $contentBuffer;
             }
         } catch (ClientException $e) {
             // 处理API错误
